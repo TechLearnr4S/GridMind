@@ -1,0 +1,26 @@
+name: gridops-plus-plus
+description: Multi-agent power grid coordination environment with reward alignment and long-horizon dynamics
+entry_point: env.gridops_env:GridOpsEnv
+
+observation_space:
+  demand: vector
+  supply: vector
+  reputation: vector
+  faults: vector
+  time_step: scalar
+
+action_space:
+  allocation: continuous_vector
+
+reward:
+  type: continuous
+  description: combination of served demand, blackout penalty, stability bonus, and honesty penalty
+
+tags:
+  - multi-agent
+  - reinforcement-learning
+  - coordination
+  - long-horizon
+  - reward-alignment
+
+version: 1.0
