@@ -1,0 +1,80 @@
+{
+    "baseline": [
+        {
+            "avg_reward": 18.189734258146842,
+            "avg_blackouts": 1.72,
+            "avg_imbalance": 0.025666996463136697,
+            "avg_stability": 0.3783333333333333,
+            "avg_reputation": 1.5100000000000007,
+            "honesty_violations": 0
+        },
+        {
+            "avg_reward": 18.886734908860095,
+            "avg_blackouts": 1.56,
+            "avg_imbalance": 0.022076211674054217,
+            "avg_stability": 0.4049999999999999,
+            "avg_reputation": 1.4993333333333336,
+            "honesty_violations": 3
+        },
+        {
+            "avg_reward": 15.87086102193864,
+            "avg_blackouts": 1.6,
+            "avg_imbalance": 0.024517785434949414,
+            "avg_stability": 0.43,
+            "avg_reputation": 1.3980000000000004,
+            "honesty_violations": 6
+        }
+    ],
+    "selfish": [
+        {
+            "avg_reward": 25.99999998139975,
+            "avg_blackouts": 0.0,
+            "avg_imbalance": 0.005259670046724324,
+            "avg_stability": 1.0,
+            "avg_reputation": 0.272,
+            "honesty_violations": 150
+        },
+        {
+            "avg_reward": 21.475652731158856,
+            "avg_blackouts": 1.76,
+            "avg_imbalance": 0.02225420614853433,
+            "avg_stability": 0.3716666666666666,
+            "avg_reputation": 0.272,
+            "honesty_violations": 150
+        },
+        {
+            "avg_reward": 20.594846106369545,
+            "avg_blackouts": 0.98,
+            "avg_imbalance": 0.006449668441708827,
+            "avg_stability": 0.49666666666666665,
+            "avg_reputation": 0.272,
+            "honesty_violations": 150
+        }
+    ],
+    "coordinated": [
+        {
+            "avg_reward": 25.886545945627248,
+            "avg_blackouts": 0.02,
+            "avg_imbalance": 0.004484682497008828,
+            "avg_stability": 0.99,
+            "avg_reputation": 1.5100000000000007,
+            "honesty_violations": 0
+        },
+        {
+            "avg_reward": 50.43730440244631,
+            "avg_blackouts": 0.32,
+            "avg_imbalance": 0.047598857600006476,
+            "avg_stability": 0.8266666666666667,
+            "avg_reputation": 1.2486666666666673,
+            "honesty_violations": 9
+        },
+        {
+            "avg_reward": 53.594356688850965,
+            "avg_blackouts": 0.74,
+            "avg_imbalance": 0.012612859776438438,
+            "avg_stability": 0.6,
+            "avg_reputation": 1.3813333333333337,
+            "honesty_violations": 4
+        }
+    ]
+}
