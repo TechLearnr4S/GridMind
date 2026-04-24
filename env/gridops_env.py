@@ -74,6 +74,17 @@ class GridOpsEnv:
     - Optional debug assertions
     """
 
+    metadata = {
+        "name": "GridOps++",
+        "description": "Multi-agent power grid coordination under uncertainty",
+        "capabilities": [
+            "multi-agent coordination",
+            "long-horizon planning",
+            "reward alignment",
+            "uncertainty reasoning"
+        ]
+    }
+
     # ------------------------------------------------------------------
     # Construction
     # ------------------------------------------------------------------
@@ -148,6 +159,12 @@ class GridOpsEnv:
         self.prev_reward = 0.0
         self.reward_components = {
             "served": 0.0, "blackout": 0.0, "stability": 0.0, "honesty": 0.0
+        }
+        self.episode_stats = {
+            "total_reward": 0.0,
+            "total_blackouts": 0,
+            "avg_stability": [],
+            "misreport_events": 0
         }
         self.reputation = np.ones(self.num_zones, dtype=np.float32)
         self._init_state()
@@ -249,6 +266,26 @@ class GridOpsEnv:
         truncated  = False
         info       = self._get_info()
         info["reward_components"] = {k: float(v) for k, v in self.reward_components.items()}
+
+        info["global_score"] = float(
+            2.0 * self.reward_components["served"]
+            - 1.5 * self.reward_components["blackout"]
+            + 1.0 * self.reward_components["stability"]
+            - 1.5 * self.reward_components["honesty"]
+        )
+
+        self.episode_stats["total_reward"] += reward
+        self.episode_stats["total_blackouts"] += int(info["blackouts"])
+        self.episode_stats["avg_stability"].append(float(info["stability_score"]))
+        self.episode_stats["misreport_events"] += int(info["honesty_violations"])
+
+        if terminated or truncated:
+            info["episode_summary"] = {
+                "total_reward": float(self.episode_stats["total_reward"]),
+                "avg_stability": float(np.mean(self.episode_stats["avg_stability"])) if self.episode_stats["avg_stability"] else 0.0,
+                "total_blackouts": int(self.episode_stats["total_blackouts"]),
+                "misreport_rate": float(self.episode_stats["misreport_events"] / (self.time_step * self.num_zones))
+            }
 
         # ── 8) Debug assertions ────────────────────────────────────────
         if self.debug:
@@ -399,10 +436,16 @@ class GridOpsEnv:
             else:
                 blackout_pen = 5.0 * float(self._blackout_mask.sum())
                 raw          = served_score
+            
+            blackout_penalty = blackout_pen + overload_pen
+            served_norm = served_score / (float(np.sum(self.demand)) + 1e-8)
+            blackout_norm = blackout_penalty / (self.num_zones + 1e-8)
+            stability_norm = 0.0
+
             self.reward_components = {
-                "served":   served_score,
-                "blackout": blackout_pen,
-                "stability": 0.0,
+                "served":   float(served_norm),
+                "blackout": float(blackout_norm),
+                "stability": float(stability_norm),
                 "honesty":  0.0,
             }
             return float(raw)
@@ -424,12 +467,17 @@ class GridOpsEnv:
             coalition_bonus = self._coalition_bonus
 
         stability_bonus = coalition_bonus - fairness_pen
+        blackout_penalty = blackout_pen + overload_pen
+
+        served_norm = ethical_served / (float(np.sum(self.demand)) + 1e-8)
+        blackout_norm = blackout_penalty / (self.num_zones + 1e-8)
+        stability_norm = stability_bonus / (float(np.mean(self.demand)) + 1e-8)
 
         self.reward_components = {
-            "served":    ethical_served,
-            "blackout":  blackout_pen + overload_pen,
-            "stability": stability_bonus,
-            "honesty":   honesty_pen_total,
+            "served":    float(served_norm),
+            "blackout":  float(blackout_norm),
+            "stability": float(stability_norm),
+            "honesty":   float(honesty_pen_total),
         }
 
         reward = (
@@ -562,6 +610,41 @@ class GridOpsEnv:
             "misreporting_rate":  float(np.mean(self.history["misreporting_rate"])),
             "coalition_rate":     float(np.mean(self.history["coalition_rate"])),
             "delayed_failures":   int(np.sum(self.history["delayed_failures"])),
+        }
+
+    def get_task_spec(self) -> dict:
+        return {
+            "goal": "Maximize served demand while minimizing blackouts and misreporting",
+            "constraints": [
+                "limited total power",
+                "partial observability",
+                "delayed cascade failures"
+            ],
+            "metrics": [
+                "reward",
+                "stability",
+                "misreport_rate",
+                "blackouts"
+            ]
+        }
+
+    def compare_to_baseline(self, baseline_reward: float) -> dict:
+        return {
+            "improvement": float(self.prev_reward - baseline_reward)
+        }
+
+    def describe_mode(self) -> dict:
+        return {
+            "baseline": "no coordination",
+            "selfish": "local optimization",
+            "coordinated": "global alignment",
+            "advanced": "reputation + coalition + stability"
+        }
+
+    def explain_step(self) -> dict:
+        return {
+            "what_happened": "allocation, faults, reward change",
+            "why": "overload / coordination / misreport"
         }
 
 
