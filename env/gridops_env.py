@@ -10,11 +10,21 @@ class GridOpsEnv:
     def __init__(self, num_zones=3, max_time=50, seed=None):
         self.num_zones = num_zones
         self.max_time = max_time
-        self.mode = "baseline"
+        self.mode = "baseline"  # "baseline", "selfish", "coordinated"
+        self.reward_mode = "local"
+        self.reputation = np.ones(self.num_zones, dtype=float)
+        self.rep_decay = 0.1
+        self.rep_recover = 0.02
+        self.rep_min = 0.2
+        self.rep_max = 2.0
+        self.ethical_weight = 1.5
         self.seed(seed)
         
     def set_mode(self, mode: str):
         self.mode = mode
+
+    def set_reward_mode(self, mode: str):
+        self.reward_mode = mode
 
     def seed(self, seed):
         self.rng = np.random.default_rng(seed)
@@ -27,6 +37,7 @@ class GridOpsEnv:
         if seed is not None:
             self.seed(seed)
         self.time = 0
+        self.reputation = np.ones(self.num_zones, dtype=float)
         self._init_state()
         return self._get_obs(), {}
 
@@ -34,6 +45,8 @@ class GridOpsEnv:
         if action is None:
             if self.mode == "selfish":
                 action = self.selfish_policy()
+            elif self.mode == "coordinated":
+                action = self.coordinated_policy()
             else:
                 action = self.rng.integers(1, 10, size=self.num_zones)
 
@@ -42,6 +55,18 @@ class GridOpsEnv:
             raise ValueError(
                 f"Expected action shape ({self.num_zones},), got {action.shape}"
             )
+
+        bids = np.array(action, dtype=float)
+        overbid = bids > (1.1 * self.demand)
+        honesty_pen = overbid.astype(float) * 2.0
+
+        self.reputation = np.clip(
+            self.reputation - self.rep_decay * overbid.astype(float) + self.rep_recover,
+            self.rep_min, self.rep_max
+        )
+
+        self._honesty_pen = honesty_pen
+        self._overbid_mask = overbid
 
         self.time += 1
         self._apply_action(action)
@@ -60,6 +85,9 @@ class GridOpsEnv:
         self.history["overloads"].append(info["overloads"])
         self.history["imbalance"].append(info["imbalance"])
         self.history["efficiency"].append(info["efficiency"])
+        self.history["stability"].append(info["stability_score"])
+        self.history["avg_reputation"].append(info["avg_reputation"])
+        self.history["honesty_violations"].append(info["honesty_violations"])
 
         return obs, reward, terminated, truncated, info
 
@@ -75,7 +103,8 @@ class GridOpsEnv:
         self.failed = np.zeros(self.num_zones, dtype=bool)
         self.history = {
             "reward": [], "blackouts": [], "overloads": [],
-            "imbalance": [], "efficiency": []
+            "imbalance": [], "efficiency": [], "stability": [],
+            "avg_reputation": [], "honesty_violations": []
         }
 
         # Initialize masks so _compute_reward/_get_info are safe pre-step
@@ -88,9 +117,11 @@ class GridOpsEnv:
     # ------------------------------------------------------------------
 
     def _apply_action(self, action):
-        action = np.clip(action, 0, None)
-        total_bids = action.sum() + 1e-8
-        self.allocated = (action / total_bids) * self.total_power
+        bids = np.maximum(np.array(action, dtype=float), 0.0)
+        weights = bids * self.reputation
+        total_w = weights.sum() + 1e-8
+
+        self.allocated = (weights / total_w) * self.total_power
 
     # ------------------------------------------------------------------
     # Stochastic Dynamics
@@ -125,7 +156,30 @@ class GridOpsEnv:
         overload_pen = 5.0 * int(self._overload_mask.sum())
         blackout_pen = 5.0 * int(self._blackout_mask.sum())
 
-        return weighted_served - overload_pen - blackout_pen
+        if self.reward_mode == "local":
+            return float(served.sum())
+
+        if self.reward_mode == "global":
+            priority_weights = self.priority.astype(float)
+            priority_weights[self.priority == 3] *= self.ethical_weight
+            ethical_served = (served * priority_weights).sum()
+
+            alloc = self.allocated
+            share = alloc / (alloc.sum() + 1e-8)
+            imbalance = np.var(share)
+
+            fairness_pen = 3 * imbalance
+
+            honesty_pen_total = float(self._honesty_pen.sum())
+
+            reward = (
+                ethical_served
+                - overload_pen
+                - blackout_pen
+                - fairness_pen
+                - honesty_pen_total
+            )
+            return float(reward)
 
     def _compute_local_rewards(self):
         served = np.minimum(self.allocated, self.demand)
@@ -149,16 +203,26 @@ class GridOpsEnv:
         alloc = self.allocated
         total = alloc.sum() + 1e-8
         share = alloc / total
+        imbalance = np.var(share)
+        fairness_pen = 3 * imbalance
         
         served = np.minimum(alloc, self.demand)
+        overloads = int(self._overload_mask.sum())
+        blackouts = int(self._blackout_mask.sum())
+        
         return {
             "served": float(served.sum()),
             "weighted_served": float(np.sum(served * self.priority)),
-            "overloads": int(self._overload_mask.sum()),
-            "blackouts": int(self._blackout_mask.sum()),
+            "overloads": overloads,
+            "blackouts": blackouts,
             "local_rewards": list(self._local_rewards),
-            "imbalance": float(np.var(share)),
+            "imbalance": float(imbalance),
             "efficiency": float(served.sum() / (self.demand.sum() + 1e-8)),
+            "fairness_penalty": float(fairness_pen),
+            "stability_score": float(1.0 / (1 + blackouts + overloads)),
+            "avg_reputation": float(self.reputation.mean()),
+            "min_reputation": float(self.reputation.min()),
+            "honesty_violations": int(self._overbid_mask.sum()),
         }
 
     # ------------------------------------------------------------------
@@ -171,28 +235,73 @@ class GridOpsEnv:
         bid = self.demand * self.priority * alpha + noise
         return np.clip(bid, 0, None).astype(float)
 
+    def coordinated_policy(self):
+        weights = self.priority * self.demand * self.reputation
+        total = weights.sum() + 1e-8
+        alloc = (weights / total) * self.total_power
+        return alloc.astype(float)
+
     def get_history(self) -> dict:
         return self.history
 
+    def summarize_episode(self):
+        return {
+            "avg_reward":       np.mean(self.history["reward"]),
+            "avg_blackouts":    np.mean(self.history["blackouts"]),
+            "avg_imbalance":    np.mean(self.history["imbalance"]),
+            "avg_stability":    np.mean(self.history["stability"]),
+            "avg_reputation":   np.mean(self.history["avg_reputation"]),
+            "honesty_violations": int(np.sum(self.history["honesty_violations"])),
+        }
+
 
 # ----------------------------------------------------------------------
-# Quick sanity test
+# Behavioral validation: selfish vs coordinated (global reward)
 # ----------------------------------------------------------------------
 
 if __name__ == "__main__":
-    for mode in ["baseline", "selfish"]:
+    configs = [
+        ("selfish",     "global"),
+        ("coordinated", "global"),
+    ]
+
+    results = []
+    for mode, reward_mode in configs:
         env = GridOpsEnv(num_zones=3, max_time=50, seed=42)
         env.set_mode(mode)
+        env.set_reward_mode(reward_mode)
         env.reset()
-        
-        for _ in range(10):
-            env.step()
-            
-        avg_reward = np.mean(env.history["reward"])
-        avg_blackouts = np.mean(env.history["blackouts"])
-        avg_imbalance = np.mean(env.history["imbalance"])
-        
-        print(f"Mode: {mode}")
-        print(f"  Avg Reward:    {avg_reward:.2f}")
-        print(f"  Avg Blackouts: {avg_blackouts:.2f}")
-        print(f"  Avg Imbalance: {avg_imbalance:.4f}\n")
+
+        truncated = False
+        while not truncated:
+            _, _, _, truncated, _ = env.step()
+
+        summary = env.summarize_episode()
+        results.append((mode, reward_mode, summary))
+
+    # Print extended comparison table
+    keys = [
+        ("avg_reward",        "avg_reward"),
+        ("avg_blackouts",     "avg_blackouts"),
+        ("avg_imbalance",     "avg_imbalance"),
+        ("avg_stability",     "avg_stability"),
+        ("avg_reputation",    "avg_reputation"),
+        ("honesty_violations","violations"),
+    ]
+    col = 16
+    header = f"{'mode':<{col}} {'reward_mode':<{col}}" + "".join(
+        f" {label:>{col}}" for _, label in keys
+    )
+    print(header)
+    print("-" * len(header))
+    for mode, reward_mode, s in results:
+        row = f"{mode:<{col}} {reward_mode:<{col}}"
+        for key, _ in keys:
+            val = s[key]
+            if isinstance(val, int):
+                row += f" {val:>{col}d}"
+            else:
+                row += f" {val:>{col}.4f}"
+        print(row)
+
+
