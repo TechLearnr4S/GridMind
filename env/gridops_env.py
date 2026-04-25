@@ -9,6 +9,57 @@ from openenv.env import Env
 
 
 # ──────────────────────────────────────────────────────────────────────────────
+# Composable Reward Rubric
+# ──────────────────────────────────────────────────────────────────────────────
+
+@dataclass
+class GridMindRubric:
+    """Composable reward rubric for GridOpsEnv.
+
+    Each component is independently inspectable and weighted.
+    This design follows the OpenEnv principle: composable rubrics > monolithic scoring.
+
+    Components
+    ----------
+    served_reward    : reward for successfully delivering power to zones
+    blackout_penalty : heavy penalty per blackout event (-6.0 each)
+    system_risk      : penalty for total unmet demand across the grid
+    instability      : penalty for overload accumulation (cascade precursor)
+    fuel_penalty     : penalty for generator overconsumption
+    coalition_bonus  : bonus when all zones cooperate within 5% demand variance
+    """
+    served_reward:    float = 0.0
+    blackout_penalty: float = 0.0   # weight: -6.0 per event
+    system_risk:      float = 0.0   # weight: -0.5
+    instability:      float = 0.0   # weight: -0.5
+    fuel_penalty:     float = 0.0   # weight: -0.1
+    coalition_bonus:  float = 0.0   # weight: +2.0
+
+    def total(self) -> float:
+        """Compute the total scalar reward from all rubric components."""
+        return (
+            self.served_reward
+            - 6.0  * self.blackout_penalty
+            - 0.5  * self.system_risk
+            - 0.5  * self.instability
+            - 0.1  * self.fuel_penalty
+            + 2.0  * self.coalition_bonus
+        )
+
+    def breakdown(self) -> dict:
+        """Return a human-readable breakdown of reward components."""
+        return {
+            "served_reward":    round(self.served_reward, 4),
+            "blackout_penalty": round(-6.0 * self.blackout_penalty, 4),
+            "system_risk":      round(-0.5 * self.system_risk, 4),
+            "instability":      round(-0.5 * self.instability, 4),
+            "fuel_penalty":     round(-0.1 * self.fuel_penalty, 4),
+            "coalition_bonus":  round(+2.0 * self.coalition_bonus, 4),
+            "total":            round(self.total(), 4),
+        }
+
+
+# ──────────────────────────────────────────────────────────────────────────────
 # Structured I/O dataclasses
 # ──────────────────────────────────────────────────────────────────────────────
 
