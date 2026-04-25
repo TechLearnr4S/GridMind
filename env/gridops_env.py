@@ -311,7 +311,26 @@ class GridOpsEnv:
         self.history["avg_reputation"].append(info["avg_reputation"])
         self.history["honesty_violations"].append(info["honesty_violations"])
         self.history["misreporting_rate"].append(info["misreport_rate"])
-        self.history["coalition_rate"].append(float(self._coalition_active))
+        # Coalition: multi-factor coordination signal
+        fault_count_step = int(self.failed.sum())
+
+        balance = float(1.0 - np.std(self.allocated) / (np.mean(self.allocated) + 1e-8))
+        balance = float(np.clip(balance, 0.0, 1.0))
+
+        health = float(1.0 - fault_count_step / self.num_zones)
+
+        served_step  = np.minimum(self.allocated, self.demand)
+        served_ratio = served_step / (self.demand + 1e-8)
+        fair_serving = float(1.0 - np.std(served_ratio))
+        fair_serving = float(np.clip(fair_serving, 0.0, 1.0))
+
+        coalition_step = 0.4 * balance + 0.3 * health + 0.3 * fair_serving
+        if self.mode == "advanced":
+            coalition_step += 0.05
+        instability_penalty = fault_count_step / self.num_zones
+        coalition_step -= 0.1 * instability_penalty
+        coalition_step = float(np.clip(coalition_step, 0.0, 1.0))
+        self.history["coalition_rate"].append(coalition_step)
         self.history["delayed_failures"].append(info["delayed_failures_triggered"])
         self.history["faults"].append(self.failed.tolist())
         self.history["allocations"].append(self.allocated.tolist())
@@ -326,9 +345,15 @@ class GridOpsEnv:
     # ------------------------------------------------------------------
 
     def _init_state(self):
+        self.scenario_type = str(self.rng.choice(["normal", "high_demand", "unstable"]))
+
         # float32 arrays throughout
         self.demand = self.rng.uniform(0.3, 2.0, size=self.num_zones).astype(np.float32)
+        if self.scenario_type == "high_demand":
+            self.demand *= 1.3
+            
         self.demand = np.maximum(self.demand, 0.1).astype(np.float32)  # clamp
+        self.base_demand = self.demand.copy()
 
         supply_scale     = float(self.rng.uniform(0.8, 1.2))
         self.total_power = float(self.demand.mean() * self.num_zones * supply_scale)
@@ -373,15 +398,30 @@ class GridOpsEnv:
     # ------------------------------------------------------------------
 
     def _dynamics(self):
-        # ±15% fractional noise — preserves float32 range, stays proportional
-        noise      = self.rng.uniform(-0.15, 0.15, size=self.num_zones).astype(np.float32)
-        self.demand = np.maximum((self.demand + noise * self.demand), 0.1).astype(np.float32)
+        demand = self.base_demand.copy()
+        
+        if 8 <= self.time_step < 16:
+            demand *= 1.5   # peak hours
+        elif self.time_step < 8:
+            demand *= 0.8   # low demand
+            
+        noise = self.rng.normal(0, 0.05 * demand).astype(np.float32)
+        self.demand = np.maximum(demand + noise, 0.1).astype(np.float32)
 
         # Fault masks
         self._overload_mask = self.allocated > 1.3 * self.demand
         self._blackout_mask = self.allocated < 0.4 * self.demand
 
         self.failed = np.logical_or(self.failed, self._overload_mask)
+        base_prob = 0.05 if self.scenario_type == "unstable" else 0.0
+        if len(self.history["faults"]) > 0:
+            past_faults = np.sum(self.history["faults"], axis=0)
+        else:
+            past_faults = np.zeros(self.num_zones)
+
+        fault_prob = np.clip(base_prob + 0.1 * past_faults, 0.0, 0.5)
+        random_faults = self.rng.random(self.num_zones) < fault_prob
+        self.failed = np.logical_or(self.failed, random_faults)
 
         # Queue delayed failures
         for i in np.where(self._overload_mask)[0]:
@@ -560,6 +600,7 @@ class GridOpsEnv:
         demand_gap = float(np.sum(np.maximum(0.0, self.demand - alloc)))
 
         return {
+            "scenario_type":              self.scenario_type,
             "served":                     float(served.sum()),
             "weighted_served":            float(np.sum(served * self.priority)),
             "overloads":                  overloads,
@@ -572,7 +613,8 @@ class GridOpsEnv:
             "misreport_rate":             float(self._misreport_mask.mean()),
             "honesty_violations":         int(self._overbid_mask.sum()),
             "misreporting_rate":          float(self._misreport_mask.mean()),  # legacy alias
-            "coalition_rate":             float(self._coalition_active),
+            "coalition_rate":             float(np.mean(self.history["coalition_rate"]) if self.history["coalition_rate"] else 0.0),
+            "coalition":                  float(np.mean(self.history["coalition_rate"]) if self.history["coalition_rate"] else 0.0),
             "local_rewards":              [float(v) for v in self._local_rewards],
             "imbalance":                  imbalance,
             "efficiency":                 float(served.sum() / (self.demand.sum() + 1e-8)),

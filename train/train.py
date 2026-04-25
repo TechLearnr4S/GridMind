@@ -67,6 +67,7 @@ def run_episode(env, demo_log=False):
     summary["avg_misreporting"]    = float(np.mean(history["misreporting"]))
     summary["avg_coalition_rate"]  = float(np.mean(history["coalition"]))
     summary["avg_delayed_failures"]= float(np.sum(history["delayed_failures"]))
+    summary["scenario_type"]       = info.get("scenario_type", "normal")
     return history, summary
 
 
@@ -142,6 +143,27 @@ if __name__ == "__main__":
         json.dump(results_json, f, indent=4)
     print("\nSaved results to results.json")
 
+    # Per-scenario evaluation
+    print("\n================================================================================")
+    print("  PER-SCENARIO EVALUATION")
+    print("================================================================================")
+    sc_col = 15
+    print(f"{'mode':<{sc_col}} {'scenario':<{sc_col}} {'reward':>10} {'blackouts':>12} {'stability':>12}")
+    print("-" * 65)
+    for name in names:
+        scenarios = {}
+        for r in summaries[name]:
+            sc = r.get("scenario_type", "normal")
+            scenarios.setdefault(sc, []).append(r)
+        
+        for sc in ["normal", "high_demand", "unstable"]:
+            if sc in scenarios:
+                runs = scenarios[sc]
+                r_reward = np.mean([x["avg_reward"] for x in runs])
+                r_blackouts = np.mean([x["avg_blackouts"] for x in runs])
+                r_stability = np.mean([x["avg_stability"] for x in runs])
+                print(f"{name:<{sc_col}} {sc:<{sc_col}} {r_reward:>10.3f} {r_blackouts:>12.3f} {r_stability:>12.3f}")
+
     # Generate plots (existing)
     import importlib.util
     _spec = importlib.util.spec_from_file_location(
@@ -183,21 +205,30 @@ if __name__ == "__main__":
 
     adv_reward = agg["advanced"]["avg_reward"]
     sel_reward = agg["selfish"]["avg_reward"]
-    reward_imp = (adv_reward - sel_reward) / sel_reward * 100
+    base_reward = agg["baseline"]["avg_reward"]
+    
+    if base_reward < 0:
+        reward_imp = adv_reward - base_reward
+        reward_str = f"Reward Gain: +{reward_imp:.2f} (absolute)"
+    else:
+        reward_imp = (adv_reward - base_reward) / base_reward * 100
+        reward_str = f"Reward Improvement: +{reward_imp:.1f}%"
 
     adv_mis = agg["advanced"]["avg_misreporting"] * 100
     sel_mis = agg["selfish"]["avg_misreporting"] * 100
 
-    adv_stab = agg["advanced"]["avg_stability"]
-    sel_stab = agg["selfish"]["avg_stability"]
-    stab_gain = (adv_stab - sel_stab) / sel_stab * 100
+    adv_stab  = float(agg["advanced"]["avg_stability"])
+    coord_stab = float(agg["coordinated"]["avg_stability"])
+    stability_gain = adv_stab - coord_stab
+    stability_gain_pct = stability_gain / (abs(coord_stab) + 1e-6) * 100
 
     print("\n----------------------------------------")
     print("GRIDOPS++ RESULTS")
     print("----------------------------------------")
     print("Best Mode: Advanced")
-    print(f"Reward Improvement: +{reward_imp:.1f}%")
+    print(reward_str)
     print(f"Misreport Reduction: {sel_mis:.0f}% -> {adv_mis:.0f}%")
-    print(f"Stability Gain: +{stab_gain:.1f}%")
+    print(f"Stability Gain: +{stability_gain:.3f} (vs coordinated)")
+    print(f"Stability Gain (%): +{stability_gain_pct:.1f}%")
     print("----------------------------------------\n")
 
