@@ -5,6 +5,8 @@ import numpy as np
 from dataclasses import dataclass
 from typing import List
 
+from openenv.env import Env
+
 
 # ──────────────────────────────────────────────────────────────────────────────
 # Structured I/O dataclasses
@@ -58,7 +60,7 @@ class GridObservation:
         }
 
 
-class GridOpsEnv:
+class GridOpsEnv(Env):
     """
     Multi-zone power grid environment with bidding-based allocation.
     Gym-style API: reset() → (obs, info), step() → (obs, reward, terminated, truncated, info).
@@ -136,6 +138,14 @@ class GridOpsEnv:
         self.reward_components = {"served": 0.0, "blackout": 0.0, "stability": 0.0, "honesty": 0.0}
 
         self.seed(seed)
+
+        # OpenEnv base class init
+        super().__init__(
+            name="GridOps++",
+            state_space={"demand": "vector", "supply": "vector", "reputation": "vector", "faults": "vector", "time_step": "scalar"},
+            action_space={"allocation": "continuous_vector"},
+            episode_max_length=max_steps,
+        )
 
     # ------------------------------------------------------------------
     # Public setters
