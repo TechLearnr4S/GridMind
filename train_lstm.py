@@ -29,19 +29,30 @@ def train():
     env = DummyVecEnv([lambda: Monitor(GridOpsEnvWrapper())])
     env = VecNormalize(env, norm_obs=True, norm_reward=False)
 
+    from typing import Callable
+
+    def linear_schedule(initial_value: float) -> Callable[[float], float]:
+        def func(progress_remaining: float) -> float:
+            return progress_remaining * initial_value
+        return func
+
     model = RecurrentPPO(
         "MlpLstmPolicy",
         env,
-        learning_rate=2e-4,          # Increased slightly for faster adaptation
+        learning_rate=linear_schedule(1e-4), # Slow, stable annealing
         n_steps=1024,
-        batch_size=128,              # Larger batch size for smoother LSTM gradients
+        batch_size=128,
         gamma=0.99,
         gae_lambda=0.95,
-        clip_range=0.15,             # Opened slightly to allow escaping local minima
-        ent_coef=0.02,               # Increased entropy to force exploration
-        target_kl=0.02,              # Slightly relaxed KL target
-        max_grad_norm=0.5,
-        policy_kwargs=dict(net_arch=[256, 256]),
+        clip_range=0.2,              # Relaxed clipping, let PPO handle constraints
+        ent_coef=0.005,              # Reduces excessive randomness
+        vf_coef=0.7,                 # Prevents exploding value_loss
+        max_grad_norm=0.5,           # Strict gradient clipping for LSTM
+        target_kl=None,              # REMOVED: KL early stopping breaks LSTM hidden states
+        policy_kwargs=dict(
+            net_arch=[256, 256],
+            enable_critic_lstm=True, # Ensure critic also uses LSTM
+        ),
         verbose=1
     )
 

@@ -180,7 +180,6 @@ class GridOpsEnv:
             "total_blackouts": 0,
             "avg_stability": [],
             "misreport_events": 0,
-            "blackout_count": 0,
             "total_unmet": 0.0
         }
         self.reputation = np.ones(self.num_zones, dtype=np.float32)
@@ -281,17 +280,39 @@ class GridOpsEnv:
         # ── 6) Memory update ──────────────────────────────────────────
         self._update_memory()
 
-        # ── 7) Reward (clipped + smoothed) ────────────────────────────
-        raw_reward = self._compute_reward()
-        reward     = float(np.clip(raw_reward, -5.0, 5.0))
+        # ── 7) Constraint gate + reward ───────────────────────────────
+        # Blackout detection AFTER all environment updates
+        blackout = (self.allocated < 0.4 * self.demand)
+        step_blackouts = int(np.sum(blackout))
+        step_unmet = float(np.sum(np.maximum(0.0, self.demand - self.allocated)))
+
+        if step_blackouts > 2:
+            reward = -50.0 - 10.0 * step_blackouts
+            terminated = True
+            truncated  = False
+            obs        = self._get_obs()
+            info       = self._get_info()
+            info["blackout_count"] = step_blackouts
+            info["total_unmet"]    = step_unmet
+            info["global_score"]   = float(reward)
+            self.episode_stats["total_blackouts"] += step_blackouts
+            self.episode_stats["total_reward"]   += reward
+            info["episode_summary"] = {
+                "total_reward":    float(self.episode_stats["total_reward"]),
+                "avg_stability":   float(np.mean(self.episode_stats["avg_stability"])) if self.episode_stats["avg_stability"] else 0.0,
+                "total_blackouts": int(self.episode_stats["total_blackouts"]),
+                "misreport_rate":  float(self.episode_stats["misreport_events"] / max(1, self.time_step * self.num_zones)),
+                "total_unmet":     float(self.episode_stats["total_unmet"]),
+            }
+            return obs, reward, terminated, truncated, info
+
+        # Safe region: compute clean reward (no clipping or tanh)
+        reward = float(self._compute_reward())
+        if step_blackouts == 2:
+            reward -= 15.0
+            
         if not np.isfinite(reward):
             reward = 0.0
-            
-        reward = float(np.tanh(reward))
-        
-        # Penalize large reward jumps
-        delta = reward - self.prev_reward
-        reward -= 0.1 * abs(delta)
         self.prev_reward = reward
 
         obs        = self._get_obs()
@@ -300,18 +321,14 @@ class GridOpsEnv:
         info       = self._get_info()
         info["reward_components"] = {k: float(v) for k, v in self.reward_components.items()}
 
-        step_blackouts = int(np.sum(self.allocated < 0.4 * self.demand))
-        step_unmet = float(np.sum(np.maximum(0.0, self.demand - self.allocated)))
-
         info["global_score"] = float(reward)
         info["blackout_count"] = step_blackouts
         info["total_unmet"] = step_unmet
 
         self.episode_stats["total_reward"] += reward
-        self.episode_stats["total_blackouts"] += int(info["blackouts"])
+        self.episode_stats["total_blackouts"] += step_blackouts
         self.episode_stats["avg_stability"].append(float(info["stability_score"]))
         self.episode_stats["misreport_events"] += int(info["honesty_violations"])
-        self.episode_stats["blackout_count"] += step_blackouts
         self.episode_stats["total_unmet"] += step_unmet
 
         if terminated or truncated:
@@ -320,7 +337,6 @@ class GridOpsEnv:
                 "avg_stability": float(np.mean(self.episode_stats["avg_stability"])) if self.episode_stats["avg_stability"] else 0.0,
                 "total_blackouts": int(self.episode_stats["total_blackouts"]),
                 "misreport_rate": float(self.episode_stats["misreport_events"] / (self.time_step * self.num_zones)),
-                "blackout_count": int(self.episode_stats["blackout_count"]),
                 "total_unmet": float(self.episode_stats["total_unmet"])
             }
 
@@ -528,18 +544,27 @@ class GridOpsEnv:
     # ------------------------------------------------------------------
 
     def _compute_reward(self) -> float:
-        served      = np.minimum(self.allocated, self.demand)
+        # ── Blackout gate (constraint enforcement) ────────────────────────────
+        blackout       = (self.allocated < 0.4 * self.demand).astype(np.float32)
+        blackout_count = float(np.sum(blackout))
 
+        # HARD CONSTRAINT: Immediately reject any policy causing >2 blackouts.
+        # No further reward computation — this state is strictly invalid.
+        if blackout_count > 2:
+            self.reward_components = {
+                "served": 0.0, "blackout": 100.0, "stability": 0.0, "honesty": 0.0
+            }
+            return -100.0
+
+        # ── Safe region: normal reward computation ────────────────────────────
+        served      = np.minimum(self.allocated, self.demand)
         unmet       = np.maximum(0.0, self.demand - self.allocated)
         total_unmet = float(np.sum(unmet))
-        
-        # Penalize unused power to prevent over-defensive hoarding
-        wasted_capacity = float(max(0.0, self.total_power - np.sum(self.allocated)))
 
-        served_norm    = float(served.sum() / (self.demand.sum() + 1e-8))
-        
-        blackout = (self.allocated < 0.4 * self.demand)
-        blackout_penalty = float(np.sum(blackout.astype(np.float32)))
+        wasted_capacity_raw  = float(max(0.0, self.total_power - np.sum(self.allocated)))
+        wasted_capacity_norm = wasted_capacity_raw / (self.total_power + 1e-8)
+
+        served_norm = float(served.sum() / (self.demand.sum() + 1e-8))
 
         weighted       = self.allocated * self.demand
         stability_norm = 1.0 - np.std(weighted) / (np.mean(weighted) + 1e-8)
@@ -547,26 +572,22 @@ class GridOpsEnv:
 
         self.reward_components = {
             "served":    float(served_norm),
-            "blackout":  float(blackout_penalty),
+            "blackout":  float(blackout_count),
             "stability": float(stability_norm),
             "honesty":   0.0,
         }
 
         reward = (
-            + 1.0 * served_norm           # Reward high served demand
-            + 0.1 * stability_norm        # Weak but present stability signal
-            - 5.0 * blackout_penalty      # Strong blackout penalty
-            - 0.3 * total_unmet           # Increased penalty for unmet demand
-            - 0.15 * wasted_capacity      # Slightly increased penalty for unused power
+            + 1.0  * served_norm
+            + 0.1  * stability_norm
+            - 0.3  * total_unmet
+            - 0.15 * wasted_capacity_norm
         )
 
         if not np.isfinite(reward):
             reward = 0.0
-            
-        reward = float(np.clip(reward, -5.0, 5.0))
-        reward = float(np.tanh(reward))
-        assert np.isfinite(reward), "Reward must be finite"
-        return reward
+
+        return float(reward)
 
     def _compute_local_rewards(self) -> np.ndarray:
         return np.minimum(self.allocated, self.demand).astype(np.float32)
