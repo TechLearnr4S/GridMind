@@ -237,6 +237,15 @@ class GridOpsEnv:
             # Correct floating-point drift
             self.allocated = (self.allocated / (alloc_sum + 1e-8) * self.total_power).astype(np.float32)
 
+        # Advanced mode: bias allocation toward high-demand zones
+        if self.mode == "advanced":
+            weights = self.demand / (np.sum(self.demand) + 1e-8)
+            self.allocated = (0.8 * self.allocated + 0.2 * weights * self.total_power).astype(np.float32)
+            # Re-normalise to conserve total_power
+            alloc_sum = float(np.sum(self.allocated))
+            if alloc_sum > 1e-8:
+                self.allocated = (self.allocated / alloc_sum * self.total_power).astype(np.float32)
+
         if np.any(np.isnan(self.allocated)):
             raise RuntimeError("Invalid allocation detected: NaN in self.allocated")
 
@@ -254,11 +263,15 @@ class GridOpsEnv:
 
         # ── 7) Reward (clipped + smoothed) ────────────────────────────
         raw_reward = self._compute_reward()
-        reward     = float(np.clip(raw_reward, -50.0, 50.0))
+        reward     = float(np.clip(raw_reward, -5.0, 5.0))
         if not np.isfinite(reward):
             reward = 0.0
-        # Exponential smoothing: blend with previous step
-        reward         = 0.8 * reward + 0.2 * self.prev_reward
+            
+        reward = float(np.tanh(reward))
+        
+        # Penalize large reward jumps
+        delta = reward - self.prev_reward
+        reward -= 0.1 * abs(delta)
         self.prev_reward = reward
 
         obs        = self._get_obs()
@@ -267,12 +280,7 @@ class GridOpsEnv:
         info       = self._get_info()
         info["reward_components"] = {k: float(v) for k, v in self.reward_components.items()}
 
-        info["global_score"] = float(
-            2.0 * self.reward_components["served"]
-            - 1.5 * self.reward_components["blackout"]
-            + 1.0 * self.reward_components["stability"]
-            - 1.5 * self.reward_components["honesty"]
-        )
+        info["global_score"] = float(reward)
 
         self.episode_stats["total_reward"] += reward
         self.episode_stats["total_blackouts"] += int(info["blackouts"])
@@ -305,6 +313,11 @@ class GridOpsEnv:
         self.history["misreporting_rate"].append(info["misreport_rate"])
         self.history["coalition_rate"].append(float(self._coalition_active))
         self.history["delayed_failures"].append(info["delayed_failures_triggered"])
+        self.history["faults"].append(self.failed.tolist())
+        self.history["allocations"].append(self.allocated.tolist())
+
+        for k in self.history:
+            self.history[k] = self.history[k][-3:]
 
         return obs, reward, terminated, truncated, info
 
@@ -339,7 +352,7 @@ class GridOpsEnv:
             "imbalance": [], "efficiency": [], "stability": [],
             "avg_reputation": [], "honesty_violations": [],
             "misreporting_rate": [], "coalition_rate": [],
-            "delayed_failures": [],
+            "delayed_failures": [], "faults": [], "allocations": [],
         }
 
         # Pre-initialise masks so reward/info calls are safe before first step
@@ -426,69 +439,84 @@ class GridOpsEnv:
 
     def _compute_reward(self) -> float:
         served       = np.minimum(self.allocated, self.demand)
-        served_score = float(served.sum())
-        overload_pen = 5.0 * float(self._overload_mask.sum())
 
-        if self.reward_mode == "local":
-            if self.mode == "selfish":
-                blackout_pen = 2.0 * float(self._blackout_mask.sum())
-                raw          = served_score * 1.3 - blackout_pen
-            else:
-                blackout_pen = 5.0 * float(self._blackout_mask.sum())
-                raw          = served_score
-            
-            blackout_penalty = blackout_pen + overload_pen
-            served_norm = served_score / (float(np.sum(self.demand)) + 1e-8)
-            blackout_norm = blackout_penalty / (self.num_zones + 1e-8)
-            stability_norm = 0.0
+        fault_count = float(self.failed.sum())
+        misreport_rate = float(self._misreport_mask.mean())
 
-            self.reward_components = {
-                "served":   float(served_norm),
-                "blackout": float(blackout_norm),
-                "stability": float(stability_norm),
-                "honesty":  0.0,
-            }
-            return float(raw)
-
-        # Global reward
-        blackout_pen     = 5.0 * float(self._blackout_mask.sum())
-        priority_weights = self.priority.astype(np.float32).copy()
-        priority_weights[self.priority == 3] *= self.ethical_weight
-        ethical_served   = float((served * priority_weights).sum())
-
-        share        = self.allocated / (self.allocated.sum() + 1e-8)
-        fairness_pen = 3.0 * float(np.var(share))
-
-        honesty_pen_total = float(self._honesty_pen.sum())
-        if self.mode == "advanced":
-            honesty_pen_total *= 2.0
-            coalition_bonus = 3.0 if self._coalition_active else 0.0
-        else:
-            coalition_bonus = self._coalition_bonus
-
-        stability_bonus = coalition_bonus - fairness_pen
-        blackout_penalty = blackout_pen + overload_pen
-
-        served_norm = ethical_served / (float(np.sum(self.demand)) + 1e-8)
-        blackout_norm = blackout_penalty / (self.num_zones + 1e-8)
-        stability_norm = stability_bonus / (float(np.mean(self.demand)) + 1e-8)
+        served_norm    = float(served.sum() / (self.demand.sum() + 1e-8))
+        blackout_norm  = float(fault_count / self.num_zones)
+        weighted       = self.allocated * self.demand
+        stability_norm = 1.0 - np.std(weighted) / (np.mean(weighted) + 1e-8)
+        stability_norm = float(np.clip(stability_norm, 0.0, 1.0))
+        honesty_norm   = misreport_rate
 
         self.reward_components = {
             "served":    float(served_norm),
             "blackout":  float(blackout_norm),
             "stability": float(stability_norm),
-            "honesty":   float(honesty_pen_total),
+            "honesty":   float(honesty_norm),
         }
 
-        reward = (
-            ethical_served
-            - overload_pen
-            - blackout_pen
-            - fairness_pen
-            - honesty_pen_total
-            + coalition_bonus
+        progress = min(0.5, self.time_step / self.max_steps)
+        w_served = 1.5 + 0.5 * progress
+        w_stability = 1.0 + 0.5 * progress
+
+        core = (
+            w_served * served_norm
+            - 2.0 * blackout_norm
+            + w_stability * stability_norm
+            - 2.0 * honesty_norm
         )
-        return float(reward)
+
+        reward = 0.0
+
+        threshold = 1.0 * np.mean(self.allocated)
+        if np.std(self.allocated) > threshold:
+            reward -= 0.5
+
+        if fault_count > 0:
+            reward -= 0.2 * fault_count
+
+        if len(self.history["faults"]) >= 2:
+            past_faults = np.array(self.history["faults"][-2])
+            if np.any(past_faults) and np.any(self._blackout_mask):
+                reward -= 0.3
+
+        if fault_count == 0:
+            reward += 0.02
+        if np.any(self._overload_mask):
+            reward -= 0.02
+        if np.std(self.allocated) < 0.1 * np.mean(self.allocated):
+            reward += 0.01
+
+        temporal_bonus = 0.0
+        if len(self.history["allocations"]) > 0:
+            prev_alloc = np.array(self.history["allocations"][-1])
+            change = float(np.mean(np.abs(self.allocated - prev_alloc)))
+            temporal_bonus = 0.03 * float(1.0 - np.clip(change, 0.0, 1.0))
+
+        # Fairness reward
+        spread = (np.max(self.allocated) - np.min(self.allocated)) / (np.mean(self.allocated) + 1e-8)
+        fairness_bonus = 0.03 * float(np.clip(1.0 - spread, 0.0, 1.0))
+
+        # Priority-aware reward
+        priority_score = np.sum(self.allocated * self.priority) / (np.sum(self.priority) + 1e-8)
+        priority_bonus = 0.1 * float(priority_score)
+
+        bonus = temporal_bonus + fairness_bonus + priority_bonus
+        bonus = float(np.clip(bonus, 0.0, 0.2))
+        reward += bonus
+
+        # Advanced-mode exclusive bonuses
+        if self.mode == "advanced":
+            reward += 0.15 * float(priority_score)
+            reward += 0.05 * float(stability_norm)
+            rep_factor = float(np.mean(self.reputation))
+            reward += 0.05 * rep_factor
+
+        reward = float(np.clip(0.8 * core + 0.2 * reward, -5.0, 5.0))
+        assert -5.0 <= reward <= 5.0, f"Reward out of bounds: {reward}"
+        return reward
 
     def _compute_local_rewards(self) -> np.ndarray:
         return np.minimum(self.allocated, self.demand).astype(np.float32)
@@ -552,6 +580,12 @@ class GridOpsEnv:
             "stability_score":            float(1.0 / (1 + blackouts + overloads)),
             "delayed_failures_triggered": int(self._delayed_failures_triggered),
             "reward_components":          {k: float(v) for k, v in self.reward_components.items()},
+            "reward_explanation": {
+                "served_high": bool(self.reward_components.get("served", 0.0) > 0.8),
+                "no_faults": bool(int(self.failed.sum()) == 0),
+                "stable": bool(self.reward_components.get("stability", 0.0) > 0.7),
+                "honest": bool(self.reward_components.get("honesty", 0.0) < 0.1)
+            }
         }
 
     # ------------------------------------------------------------------
