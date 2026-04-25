@@ -72,6 +72,21 @@ reward = served_reward
        + 2.0  × coalition_bonus          # if zones cooperate within 5% variance
 ```
 
+### Composable Rubric System
+
+Each reward component is independently named, weighted, and inspectable via `GridMindRubric`:
+
+```python
+from env.gridops_env import GridMindRubric
+
+rubric = GridMindRubric(served_reward=5.2, blackout_penalty=1.0, system_risk=2.3)
+print(rubric.breakdown())
+# → {'served_reward': 5.2, 'blackout_penalty': -6.0, 'system_risk': -1.15, ..., 'total': -0.55}
+```
+
+This composable design prevents reward hacking: an agent cannot exploit a single component without being penalized by the others.
+
+
 ---
 
 ## 🧠 The Agent: PPO + LSTM
