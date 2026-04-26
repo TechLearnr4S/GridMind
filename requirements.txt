@@ -1,0 +1,7 @@
+openenv>=0.1.0
+gymnasium>=0.28.1
+stable-baselines3>=2.1.0
+sb3-contrib>=2.1.0
+numpy>=1.23.5
+gradio>=3.50.0
+matplotlib>=3.7.1
