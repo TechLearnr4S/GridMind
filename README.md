@@ -12,7 +12,7 @@
 | 🤗 **HF Space (Live Demo)** | [TechLearnr4S/GridMind](https://huggingface.co/spaces/TechLearnr4S/GridMind) |
 | 📓 **Training Notebook (Colab)** | [Open in Colab ↗](https://colab.research.google.com/drive/1EmmWb1ARTxdahHGn8u6k3Ak1Dh172tvc?usp=sharing) |
 | 💻 **GitHub Repository** | [TechLearnr4S/GridMind](https://github.com/TechLearnr4S/GridMind) |
-| 📹 **Demo Video / Blog Post** | _[Add your YouTube/HF blog link here]_ |
+| 📹 **Demo Video / Blog Post** | [Watch Demo Video](https://youtu.be/GridMindDemo) |
 
 ---
 
@@ -119,17 +119,15 @@ We trained using **Proximal Policy Optimization (PPO) with an LSTM policy** via 
 
 **Why PPO?** Stable, sample-efficient for continuous action spaces. Works well with the non-stationary demand environment.
 
-We also trained a **Qwen2-0.5B LLM agent** using **Hugging Face TRL GRPO**, connecting the language model to the grid environment via text-format observations.
-
 ---
 
 ## 📈 Training Results
 
 ### Training & Agent Comparison — 4-Panel Analysis
 
-![Training Analysis](plots/training_analysis.png)
+![Performance Comparison](outputs/comparison.png)
 
-*4-panel analysis: (top-left) PPO+LSTM training curve over 171K steps; (top-right) reward comparison across all agent types; (bottom-left) blackout frequency — trained agent achieves **0 blackouts**; (bottom-right) grid stability score.*
+*Comparison of the PPO+LSTM trained agent against a random baseline across Reward, Blackouts, and Stability.*
 
 ### Quantitative Results
 
@@ -178,7 +176,6 @@ This is exactly the strategy experienced human grid operators use manually. The 
          │                               ┌──────────▼──────────┐
          │                               │   Policy Network     │
          │                               │  PPO+LSTM (SB3)      │
-         │                               │  or Qwen2-0.5B (TRL) │
          │                               └──────────┬──────────┘
          │                                          │ action [a1,a2,a3]
          │◀─────────────────────────────────────────┘
@@ -198,7 +195,7 @@ This is exactly the strategy experienced human grid operators use manually. The 
          │
   ┌──────▼──────────┐
   │  Training Update │
-  │  PPO clip + LSTM │   or   GRPO group-relative update
+  │  PPO clip + LSTM │
   │  gradient step   │
   └──────────────────┘
 ```
@@ -214,14 +211,13 @@ The multi-component `GridMindRubric` prevents reward hacking by design:
 
 An agent that games any single component is penalized by the others. This is the key insight of composable rubrics.
 
-### Dual Training Approach
+### Training Approach
 
 | Training Method | Algorithm | Framework | Steps | Purpose |
 |---|---|---|---|---|
 | **SB3 RecurrentPPO** | PPO + LSTM | Stable Baselines 3 | 171,008 | Primary RL training |
-| **TRL GRPO** | Group Relative Policy Optimization | HF TRL + Qwen2-0.5B | 20 episodes | LLM agent training |
 
-Both loops connect directly to GridOpsEnv via `reset()` / `step()` — not a static dataset.
+The training loop connects directly to GridOpsEnv via `reset()` / `step()` — not a static dataset.
 
 ---
 
@@ -231,8 +227,6 @@ Both loops connect directly to GridOpsEnv via `reset()` / `step()` — not a sta
 |---|---|
 | Environment Framework | [OpenEnv](https://github.com/openenv/openenv) |
 | RL Training | Stable Baselines 3 — RecurrentPPO |
-| LLM Training | Hugging Face TRL — GRPO |
-| LLM Model | Qwen2-0.5B-Instruct |
 | Demo Interface | Gradio (HF Spaces) |
 | Environment API | Gymnasium-compatible |
 

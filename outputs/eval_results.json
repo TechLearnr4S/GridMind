@@ -1,0 +1,13 @@
+{
+    "metrics": {
+        "reward": {
+            "mean": 64.83837127685547
+        },
+        "blackouts": {
+            "mean": 14.3
+        },
+        "stability": {
+            "mean": 0.8207666666666665
+        }
+    }
+}
