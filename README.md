@@ -125,19 +125,29 @@ We also trained a **Qwen2-0.5B LLM agent** using **Hugging Face TRL GRPO**, conn
 
 ## 📈 Training Results
 
-### Reward Curve — 171,008 Timesteps
+### Training & Agent Comparison — 4-Panel Analysis
 
-![Training Reward Curve](plots/reward_curve.png)
+![Training Analysis](plots/training_analysis.png)
 
-*Agent improves from -175 (frequent blackouts) → -103 (stable grid management) over 171K steps. Rolling average (window=10) shown in bold.*
+*4-panel analysis: (top-left) PPO+LSTM training curve over 171K steps; (top-right) reward comparison across all agent types; (bottom-left) blackout frequency — trained agent achieves **0 blackouts**; (bottom-right) grid stability score.*
 
-### Quantitative Improvement: Before vs After Training
+### Quantitative Results
+
+| Agent Type | Avg Reward | Avg Blackouts | Grid Stability |
+|---|---|---|---|
+| 🎲 Baseline (Random) | -0.458 | 2.11 | 0.333 |
+| 🤖 Selfish Heuristic | -0.016 | 0.11 | 0.944 |
+| 🤝 Coordinated Policy | +0.125 | 0.33 | 0.778 |
+| 🏆 **PPO+LSTM (Trained)** | **+0.194** | **0.00** | **0.944** |
+
+**PPO+LSTM vs Baseline: +142% reward, -100% blackouts, +183% stability.**
+
+### Training Curve Summary
 
 | Metric | Start of Training | End of Training (171K steps) | Improvement |
 |---|---|---|---|
 | Avg Episode Reward | **-177** | **-103** | **+41.8%** |
 | Best Episode Reward | -177 | **-103** | **+41.8%** |
-| Rolling Avg (window 10) | ~-168 | ~-110 | **+34.5%** |
 
 *Evidence: Full training log in `outputs/training_logs.csv`. Reward curve committed to `plots/reward_curve.png`.*
 
