@@ -102,6 +102,18 @@ def evaluate():
     print(f"Avg Stability      : {avg_stability:.3f}")
     print("=" * 50)
 
+    import json
+    results = {
+        "metrics": {
+            "reward": {"mean": float(avg_reward)},
+            "blackouts": {"mean": float(avg_blackouts)},
+            "stability": {"mean": float(avg_stability)}
+        }
+    }
+    with open("outputs/eval_results.json", "w") as f:
+        json.dump(results, f, indent=4)
+    print("Saved results to outputs/eval_results.json")
+
 
 if __name__ == "__main__":
     evaluate()
