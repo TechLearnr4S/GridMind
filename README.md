@@ -163,7 +163,69 @@ This is exactly the strategy experienced human grid operators use manually. The 
 
 ---
 
-## 🏗️ Technical Stack
+## ⚙️ Training Pipeline Architecture
+
+```
+┌─────────────────────────────────────────────────────────────────┐
+│                    GridMind Training Pipeline                    │
+└─────────────────────────────────────────────────────────────────┘
+
+  ┌──────────────┐     state_to_text()     ┌──────────────────┐
+  │  GridOpsEnv  │ ─────────────────────▶  │  Observation     │
+  │  (OpenEnv)   │                         │  (dict or text)  │
+  └──────┬───────┘                         └────────┬─────────┘
+         │  reset() / step()                        │
+         │                               ┌──────────▼──────────┐
+         │                               │   Policy Network     │
+         │                               │  PPO+LSTM (SB3)      │
+         │                               │  or Qwen2-0.5B (TRL) │
+         │                               └──────────┬──────────┘
+         │                                          │ action [a1,a2,a3]
+         │◀─────────────────────────────────────────┘
+         │
+  ┌──────▼───────────────────────────────────┐
+  │          GridMindRubric (reward)          │
+  │                                          │
+  │  served_reward    +5.2  (power delivered) │
+  │  blackout_penalty -6.0  (per event)       │
+  │  system_risk      -0.5× (unmet demand)    │
+  │  instability      -0.5× (overload build)  │
+  │  fuel_penalty     -0.1× (overconsumption) │
+  │  coalition_bonus  +2.0  (zone cooperation)│
+  │                   ────────────────        │
+  │  total reward:    scalar ∈ [-∞, +∞]       │
+  └──────────────────────────────────────────┘
+         │
+  ┌──────▼──────────┐
+  │  Training Update │
+  │  PPO clip + LSTM │   or   GRPO group-relative update
+  │  gradient step   │
+  └──────────────────┘
+```
+
+### Why the Reward is Hard to Game
+
+The multi-component `GridMindRubric` prevents reward hacking by design:
+
+- **Can't exploit blackouts**: Every blackout event costs -6.0, larger than any single-step served_reward gain
+- **Can't exploit curtailment**: Under-serving triggers system_risk penalty and reputation decay
+- **Can't exploit over-serving**: Overloads accumulate as instability, leading to delayed blackouts
+- **Coalition bonus**: Incentivizes the agent to treat zones fairly — a critically important ethical constraint
+
+An agent that games any single component is penalized by the others. This is the key insight of composable rubrics.
+
+### Dual Training Approach
+
+| Training Method | Algorithm | Framework | Steps | Purpose |
+|---|---|---|---|---|
+| **SB3 RecurrentPPO** | PPO + LSTM | Stable Baselines 3 | 171,008 | Primary RL training |
+| **TRL GRPO** | Group Relative Policy Optimization | HF TRL + Qwen2-0.5B | 20 episodes | LLM agent training |
+
+Both loops connect directly to GridOpsEnv via `reset()` / `step()` — not a static dataset.
+
+---
+
+
 
 | Component | Technology |
 |---|---|
