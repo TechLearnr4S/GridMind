@@ -259,9 +259,11 @@ class GridOpsEnv(Env):
             return "Grid not initialised. Call reset() first."
 
         priority_labels = {1: "Residential (low)", 2: "Commercial (medium)", 3: "Hospital/Critical (HIGH)"}
+        obs = self._get_obs()
+        priorities = obs.get("priority", [1] * self.num_zones)
         zone_lines = []
         for i in range(self.num_zones):
-            ptype = priority_labels.get(int(self.zone_priorities[i]), "Unknown")
+            ptype = priority_labels.get(int(priorities[i]), "Unknown")
             fault_status = "⚠️ FAULT DETECTED" if self.faults[i] > 0 else "✅ Healthy"
             zone_lines.append(
                 f"  Zone {i+1} [{ptype}]: demand={self.demand[i]:.3f}, "
