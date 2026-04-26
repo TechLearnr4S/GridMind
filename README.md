@@ -10,7 +10,7 @@
 | Deliverable | Link |
 |---|---|
 | 🤗 **HF Space (Live Demo)** | [TechLearnr4S/GridMind](https://huggingface.co/spaces/TechLearnr4S/Grid_Mind) |
-| 📓 **Training Notebook (Colab)** | [Open in Colab ↗](https://colab.research.google.com/drive/1EmmWb1ARTxdahHGn8u6k3Ak1Dh172tvc?usp=sharing) |
+| 📓 **Training Notebook (Colab)** | [Open in Colab ↗]([https://colab.research.google.com/drive/1EmmWb1ARTxdahHGn8u6k3Ak1Dh172tvc?usp=sharing](https://colab.research.google.com/drive/18i-PpU-2eNl9NtSUFlkxVbyp4Er6xh69?usp=sharing)) |
 | 💻 **GitHub Repository** | [TechLearnr4S/GridMind](https://github.com/TechLearnr4S/GridMind) |
 | 📹 **Demo Video / Blog Post** | [Watch Demo on YouTube](https://youtu.be/example_video_id) |
 
